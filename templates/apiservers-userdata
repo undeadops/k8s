@@ -1,0 +1,62 @@
+#cloud-config
+package_upgrade: true
+
+packages: ['docker-ce']
+
+apt:
+  preserve_sources_list: true
+  sources:
+    docker-ce.list:
+      # 2.1 source
+      #
+      # Creates a file in /etc/apt/sources.list.d/ for the sources list entry
+      source: "deb [arch=amd64] https://download.docker.com/linux/ubuntu $RELEASE stable"
+
+      # 2.2 keyid
+      #
+      # Importing a gpg key for a given key id. Used keyserver defaults to
+      # keyserver.ubuntu.com
+      keyid: 0EBFCD88 # GPG key ID published on a key server
+
+write_files:
+- path: /etc/environment
+  permissions: 0644
+  content: |
+    PRIVATE_IPV4=$private_ipv4
+- path: /etc/systemd/system/etcd.service
+  content: |
+    [Unit]
+    Requires=docker.service
+    After=docker.service
+
+    [Install]
+    WantedBy=multi-user.target
+
+    [Service]
+    Restart=on-failure
+    RestartSec=6
+    EnvironmentFile=/run/metadata/coreos
+    Environment="ETCD_DATA_DIR=/var/lib/etcd"
+    ExecStartPre=/usr/bin/docker pull quay.io/coreos/etcd:${var.ETCD_IMAGE_TAG}
+    ExecStart=/usr/bin/docker run --rm --name etcd quay.io/coreos/etcd:${var.ETCD_IMAGE_TAG}  \
+    --name="${format("master%02d.%s", count.index + 1, var.dns_zone)}" \
+    --advertise-client-urls http://$${PRIVATE_IPV4}:2379,http://$${PRIVATE_IPV4}:4001 \
+    --initial-advertise-peer-urls="http://$${PRIVATE_IPV4}:2380" \
+    --listen-client-urls="http://0.0.0.0:2379" \
+    --listen-peer-urls="http://$${PRIVATE_IPV4}:2380" \
+    --discovery-srv="${var.dns_zone}" \
+    --initial-cluster-token="${var.dns_zone}" \
+    --initial-cluster-state="new"
+
+runcmd:
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, enable, docker.service ]
+  - [ systemctl, enable, etcd.service ]
+  - [ systemctl, start, --no-block, docker.service ]
+  - [ systemctl, start, --no-block, etcd.service ]
+
+power_state:
+  delay: "now"
+  mode: reboot
+  message: First reboot
+  condition: True
